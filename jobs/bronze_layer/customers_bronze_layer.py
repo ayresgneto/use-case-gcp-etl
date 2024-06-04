@@ -3,6 +3,7 @@ import os
 import sys
 sys.path.append('/home/ayres/Documents/projects/use-case-gcp-etl/classes')
 import DataIngestion
+from google.cloud import bigquery
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 import logging as log
@@ -26,15 +27,43 @@ data_ingestor = DataIngestion.DataIngestor("sql", "olist")
 
 db_properties = data_ingestor.read_data()
 
-def job_ingestion_name():
+def get_batch_id():
     return datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
+
+batch_id = get_batch_id()
+
+#extraindo data do batch_id e formatando string em timestamp
+ingestion_time = '-'.join(batch_id.split('-')[:6])
+ingestion_time = datetime.datetime.strptime(ingestion_time, "%Y-%m-%d-%H-%M-%S")
+ingestion_time = ingestion_time.isoformat()
+
+
+def write_metadata_batches(bucket,layer, data_source, table, batch_id, ingestion_time):
+    
+    
+
+    try:
+        client = bigquery.Client()
+
+        table_ref = client.dataset("metadata").table("batches")
+        metadata_table = client.get_table(table_ref)
+
+        data = [{'bucket': bucket, 'layer': layer, 'data_source': data_source, 'table': table, 'batch_id': batch_id, 'ingestion_time': ingestion_time}]
+
+        errors = client.insert_rows(metadata_table, data)
+
+        if errors == []:
+            print("job details inserted in metadata.batches!")
+        else:
+            print("error: ", errors)
+    except Exception as e:
+        log.error("Error: ",e)
 
 BUCKET = "etl-use-case-gcp"
 LAYER = "bronze_layer"
 TABLE = "public.customers"
-jobname = job_ingestion_name()
-PATH = f"gs://{BUCKET}/{LAYER}/{db_properties['name']}/{TABLE}/{jobname}"
 
+PATH = f"gs://{BUCKET}/{LAYER}/{db_properties['name']}/{TABLE}/{batch_id}"
 
 try:
     df = spark.read \
@@ -53,10 +82,9 @@ try:
     #df.write.partitionBy("<col_date>").format("parquet").save("gs://<caminho_storage>")
 
     df.write.format("parquet").save(PATH)
+    log.info(f"ingestion job sucess!")
+    write_metadata_batches(BUCKET,LAYER,"olist",TABLE, batch_id, ingestion_time)
+    spark.stop()
 
 except Exception as e:
-    log.error("Ocorreu um erro ao salvar os dados no Google Cloud Storage: ",e)
-
-
-
-#spark.stop()
+    log.error("Error: ",e)

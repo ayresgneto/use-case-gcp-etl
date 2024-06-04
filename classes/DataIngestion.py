@@ -7,7 +7,7 @@ class DataIngestor:
     def __init__(self, format, dbname=None):
         self.format = format
         self.dbname = dbname
-        #self.database_config = databases.databases_list
+        
 
     def read_data(self):
 
@@ -30,8 +30,4 @@ class DataIngestor:
 
         return data
 
-# if __name__ == "__main__":
-    
-#     ingestao = DataIngestor("sql", dbname="xuxa")
-#     ingestao.read_data()
    
