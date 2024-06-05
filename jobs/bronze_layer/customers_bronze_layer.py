@@ -9,6 +9,12 @@ import pyspark.sql.functions as F
 import logging as log
 import uuid
 
+PROJECT_ID = "serious-glyph-328219"
+BUCKET = "etl-use-case-gcp"
+LAYER = "bronze_layer"
+DATA_SOURCE_TABLE = "public.customers"
+BRONZE_LAYER_TABLE = "olist_customers"
+
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/ayres/.config/gcloud/application_default_credentials.json"
 
 spark = SparkSession \
@@ -25,66 +31,115 @@ conf.set("fs.AbstractFileSystem.gs.impl", "com.google.cloud.hadoop.fs.gcs.Google
 
 data_ingestor = DataIngestion.DataIngestor("sql", "olist")
 
-db_properties = data_ingestor.read_data()
+data_source_properties = data_ingestor.read_data()
+
 
 def get_batch_id():
-    return datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
 
-batch_id = get_batch_id()
+    batch_id = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
 
-#extraindo data do batch_id e formatando string em timestamp
-ingestion_time = '-'.join(batch_id.split('-')[:6])
-ingestion_time = datetime.datetime.strptime(ingestion_time, "%Y-%m-%d-%H-%M-%S")
-ingestion_time = ingestion_time.isoformat()
+    #tratamento para extrair o ingestion time (TIMESTAMP)
+    ingestion_time = '-'.join(batch_id.split('-')[:6])
+    ingestion_time = datetime.datetime.strptime(ingestion_time, "%Y-%m-%d-%H-%M-%S")
+    ingestion_time = ingestion_time.isoformat()
 
+    return batch_id, ingestion_time
 
-def write_metadata_batches(bucket,layer, data_source, table, batch_id, ingestion_time):
+batch_id, ingestion_time = get_batch_id()
+
+#caminho do output para ingestao
+PATH = f"gs://{BUCKET}/{LAYER}/{data_source_properties['name']}/{DATA_SOURCE_TABLE}/{batch_id}"
+
+def validating_and_ingest():
+
+    client = bigquery.Client()
+
+    # Ingestao de dados
+    def data_ingestion(bucket,layer, data_source, table, batch_id, ingestion_time):
+
     
-    
-
-    try:
-        client = bigquery.Client()
-
         table_ref = client.dataset("metadata").table("batches")
         metadata_table = client.get_table(table_ref)
 
-        data = [{'bucket': bucket, 'layer': layer, 'data_source': data_source, 'table': table, 'batch_id': batch_id, 'ingestion_time': ingestion_time}]
+        try:
+            df = spark.read \
+            .format("jdbc") \
+            .option("url", f"{data_source_properties['url']}") \
+            .option("dbtable", f"{DATA_SOURCE_TABLE}") \
+            .option("user", f"{data_source_properties['user']}") \
+            .option("password", f"{data_source_properties['password']}") \
+            .option("driver", "org.postgresql.Driver") \
+            .load()
 
-        errors = client.insert_rows(metadata_table, data)
+            #adiciona coluna batch_id
+            df = df.withColumn("batch_id", F.lit(batch_id))
+            df.write.format("parquet").save(PATH)
+            log.info(f"ingestion job sucess!")
 
-        if errors == []:
-            print("job details inserted in metadata.batches!")
-        else:
-            print("error: ", errors)
-    except Exception as e:
-        log.error("Error: ",e)
+            data = [{'bucket': bucket, 'layer': layer, 'data_source': data_source, 'table': table, 'batch_id': batch_id, 'ingestion_time': ingestion_time}]
 
-BUCKET = "etl-use-case-gcp"
-LAYER = "bronze_layer"
-TABLE = "public.customers"
+            errors = client.insert_rows(metadata_table, data)
+            if errors == []:
+                print("job details inserted in metadata.batches!")
+            else:
+                print("error: ", errors)
 
-PATH = f"gs://{BUCKET}/{LAYER}/{db_properties['name']}/{TABLE}/{batch_id}"
+            spark.stop()
 
-try:
-    df = spark.read \
-        .format("jdbc") \
-        .option("url", f"{db_properties['url']}") \
-        .option("dbtable", f"{TABLE}") \
-        .option("user", f"{db_properties['user']}") \
-        .option("password", f"{db_properties['password']}") \
-        .option("driver", "org.postgresql.Driver") \
-        .load()
 
-    #tabela nao esta apta ao uso de ingestao incremental (sem campos timestamp), portanto sera feito ingestao full. 
-    #Em ambiente Big Data, algumas abordagens poderiam ser realizadas para atenuar o problema como criacao de indices (caso nao exista), bem como,
-    #a insercao de colunas de controle tipo timestamp como: inserted_at, updated_at ou last_update
+        except Exception as e:
+            log.error("Error: ",e)
+    
+    # Consulta SQL para verificar se todos os registros no batch estão ingeridos
+    def check_batch_ingested(batch_id):
 
-    #df.write.partitionBy("<col_date>").format("parquet").save("gs://<caminho_storage>")
+        
+        query = f"""
+        SELECT batch_id, COUNT(*) AS total
+        FROM {PROJECT_ID}.{LAYER}.{BRONZE_LAYER_TABLE}
+        GROUP BY batch_id
+        """
 
-    df.write.format("parquet").save(PATH)
-    log.info(f"ingestion job sucess!")
-    write_metadata_batches(BUCKET,LAYER,"olist",TABLE, batch_id, ingestion_time)
-    spark.stop()
+        result = client.query(query).result()
 
-except Exception as e:
-    log.error("Error: ",e)
+        for row in result:
+
+            total_linhas = row.total
+
+            if total_linhas == 0 or row.total == 0:
+
+                return True
+          
+        return False
+    
+    # Marca o campo 'ingested' como True após a ingestão dos dados
+    # def set_ingested_status(batch_id):
+        
+    #     query = f"""
+    #     UPDATE {PROJECT_ID}.metadata.batches
+    #     SET ingested = TRUE
+    #     WHERE batch_id = '{batch_id}'
+    #     """
+
+        client.query(query).result()
+
+    # Verifique se o batch está ingerido antes de ingerir novos dados                           
+    if check_batch_ingested(batch_id):
+        print("Ingesting new data...")
+        #--customer tem 99441 rows
+        data_ingestion(BUCKET, LAYER, data_source_properties["name"], DATA_SOURCE_TABLE, batch_id, ingestion_time)
+
+        #set_ingested_status(batch_id)
+        print("data load complete!!")
+            
+    else:
+        print("nothing to ingest...")  
+
+validating_and_ingest()
+    
+
+
+
+
+
+

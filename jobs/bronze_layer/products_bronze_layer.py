@@ -31,21 +31,33 @@ data_ingestor = DataIngestion.DataIngestor("sql", "olist")
 
 db_properties = data_ingestor.read_data()
 
+
 def get_batch_id():
-    return datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
 
-batch_id = get_batch_id()
+    batch_id = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
 
-def validating_and_ingest(bucket,layer, data_source, table, batch_id, ingestion_time):
+    #tratamento para extrair o ingestion time (TIMESTAMP)
+    ingestion_time = '-'.join(batch_id.split('-')[:6])
+    ingestion_time = datetime.datetime.strptime(ingestion_time, "%Y-%m-%d-%H-%M-%S")
+    ingestion_time = ingestion_time.isoformat()
+
+    return batch_id, ingestion_time
+
+batch_id, ingestion_time = get_batch_id()
+
+#caminho do output para ingestao
+PATH = f"gs://{BUCKET}/{LAYER}/{db_properties['name']}/{TABLE}/{batch_id}"
+
+def validating_and_ingest():
 
     client = bigquery.Client()
+
+    # Ingestao de dados
+    def data_ingestion(bucket,layer, data_source, table, batch_id, ingestion_time):
+
     
-    table_ref = client.dataset("metadata").table("batches")
-    metadata_table = client.get_table(table_ref)
-
-    def data_ingestion():
-
-        PATH = f"gs://{BUCKET}/{LAYER}/{db_properties['name']}/{TABLE}/{batch_id}"
+        table_ref = client.dataset("metadata").table("batches")
+        metadata_table = client.get_table(table_ref)
 
         try:
             df = spark.read \
@@ -59,27 +71,28 @@ def validating_and_ingest(bucket,layer, data_source, table, batch_id, ingestion_
 
             df.write.format("parquet").save(PATH)
             log.info(f"ingestion job sucess!")
+
             data = [{'bucket': bucket, 'layer': layer, 'data_source': data_source, 'table': table, 'batch_id': batch_id, 'ingestion_time': ingestion_time}]
 
             errors = client.insert_rows(metadata_table, data)
-
             if errors == []:
                 print("job details inserted in metadata.batches!")
             else:
                 print("error: ", errors)
-            
+
             spark.stop()
 
 
         except Exception as e:
-                log.error("Error: ",e)
-
+            log.error("Error: ",e)
+    
+    # Consulta SQL para verificar se todos os registros no batch estão ingeridos
     def check_batch_ingested(batch_id):
 
-        # Consulta SQL para verificar se todos os registros no batch estão ingeridos
+        
         query = f"""
         SELECT COUNT(*) AS total
-        FROM 'metadata.batches'
+        FROM metadata.batches
         WHERE batch_id = '{batch_id}' AND NOT ingested
         """
 
@@ -89,26 +102,28 @@ def validating_and_ingest(bucket,layer, data_source, table, batch_id, ingestion_
                 return True
         return False
     
+    # Marca o campo 'ingested' como True após a ingestão dos dados
     def set_ingested_status(batch_id):
-        # Função para marcar o campo 'ingested' como True após a ingestão dos dados
+        
         query = f"""
-        UPDATE 'metadata.batches' 
+        UPDATE metadata.batches 
         SET ingested = TRUE
         WHERE batch_id = '{batch_id}'
         """
 
         client.query(query).result()
-                            
-    def check_ingest_new_data(batch_id):
 
-        # Verifique se o batch está ingerido antes de ingerir novos dados
-        if check_batch_ingested(batch_id):
-            print("batch ingested. Ignoring new data....")
-        else:
-            print("Ingesting new data...")
-            data_ingestion()
+    # Verifique se o batch está ingerido antes de ingerir novos dados                           
+    if check_batch_ingested(batch_id):
+        print("batch ingested. Ignoring new data....")
+    else:
+        print("Ingesting new data...")
+        data_ingestion()
+        set_ingested_status(batch_id)
+        print("data load complete!!")
+
+validating_and_ingest()
     
-
 
 
 
