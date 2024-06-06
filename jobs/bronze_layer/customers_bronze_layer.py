@@ -45,19 +45,23 @@ def get_batch_id():
 
     return batch_id, ingestion_time
 
-batch_id, ingestion_time = get_batch_id()
+#batch_id, ingestion_time = get_batch_id()
 
-#caminho do output para ingestao
-PATH = f"gs://{BUCKET}/{LAYER}/{data_source_properties['name']}/{DATA_SOURCE_TABLE}/{batch_id}"
 
 def validating_and_ingest():
 
+    batch_id, ingestion_time = get_batch_id()
+
+    #caminho do output para ingestao
+    PATH = f"gs://{BUCKET}/{LAYER}/{data_source_properties['name']}/{DATA_SOURCE_TABLE}/{batch_id}"
+ 
     client = bigquery.Client()
 
     # Ingestao de dados
-    def data_ingestion(bucket,layer, data_source, table, batch_id, ingestion_time):
+    def data_ingestion(bucket,layer, data_source, table):
+       
+ 
 
-    
         table_ref = client.dataset("metadata").table("batches")
         metadata_table = client.get_table(table_ref)
 
@@ -86,48 +90,70 @@ def validating_and_ingest():
 
             spark.stop()
 
-
         except Exception as e:
             log.error("Error: ",e)
+        
+        return batch_id, ingestion_time
     
     # Consulta SQL para verificar se todos os registros no batch estão ingeridos
-    def check_batch_ingested(batch_id):
-
+    def check_ingested_data():
         
-        query = f"""
-        SELECT batch_id, COUNT(*) AS total
+        query_ingerido = f"""
+        SELECT COUNT(batch_id) AS total
         FROM {PROJECT_ID}.{LAYER}.{BRONZE_LAYER_TABLE}
-        GROUP BY batch_id
+        WHERE batch_id = '{batch_id}'
         """
 
-        result = client.query(query).result()
+        query_new_data = f"""
+        SELECT COUNT(batch_id) as batch_id_total
+        FROM {PROJECT_ID}.metadata.batches
+        WHERE batch_id = '{batch_id}'
+        """
 
-        for row in result:
+        result_ingerido = list(client.query(query_ingerido).result())
+        result_new_data = list(client.query(query_new_data).result())
 
-            total_linhas = row.total
-
-            if total_linhas == 0 or row.total == 0:
-
-                return True
-          
-        return False
-    
-    # Marca o campo 'ingested' como True após a ingestão dos dados
-    # def set_ingested_status(batch_id):
+        #verifica se a tabela esta vazia
+        if not result_ingerido:
+            return True
         
-    #     query = f"""
-    #     UPDATE {PROJECT_ID}.metadata.batches
-    #     SET ingested = TRUE
-    #     WHERE batch_id = '{batch_id}'
-    #     """
+        #verifica se os dados ja foram ingeridos
+        for row in result_ingerido:
+            if row.total != 0: 
+                return False
+        
+        #verifica se os dados sao novos
+        for row in result_new_data:
+           if row.batch_id_total == 0: 
+                return True
+           
+        return False
 
-        client.query(query).result()
+    def check_ingestion_test():
 
+        consulta_sql = f"""
+        SELECT batch_id
+        FROM {PROJECT_ID}.{LAYER}.{BRONZE_LAYER_TABLE}
+        """
+        df_destino = client.query(consulta_sql).to_dataframe()
+
+        df_origem = spark.read.parquet(PATH)
+
+        df_origem_filtrado = df_origem.select("batch_id").distinct()
+        df_destino_filtrado = df_destino.select("batch_id").distinct()
+
+        df_duplicatas = df_origem_filtrado.join(df_destino_filtrado, on="batch_id", how="inner")
+
+        if df_duplicatas.count() == 0:
+            return True
+        return False
+        
+        
     # Verifique se o batch está ingerido antes de ingerir novos dados                           
-    if check_batch_ingested(batch_id):
+    if check_ingestion_test():
         print("Ingesting new data...")
         #--customer tem 99441 rows
-        data_ingestion(BUCKET, LAYER, data_source_properties["name"], DATA_SOURCE_TABLE, batch_id, ingestion_time)
+        data_ingestion(BUCKET, LAYER, data_source_properties["name"], DATA_SOURCE_TABLE)
 
         #set_ingested_status(batch_id)
         print("data load complete!!")
