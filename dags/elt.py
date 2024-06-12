@@ -1,21 +1,22 @@
 import logging
-from pathlib import Path
-
-path = Path.cwd()
-
+import sys
+sys.path.append('/home/ayres/Documents/projects/use-case-gcp-etl/jobs')
+from jobs.customers_bronze_layer_full import bronze_data_ingestion
+import datetime
 from airflow import DAG
 from airflow.operators.bash_operator import BashOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.utils.dates import days_ago
 from datetime import timedelta
+import uuid
 
 default_args = {
-    'owner': 'oluwatobitobias',
-    'description': 'a workflow of our ELT process',
+    'owner': 'ayres',
+    'description': 'GCP ELT',
     'start_date': days_ago(1),
-    'depends_on_past': False,
-    'retries': 1,
-    'retry_delay': timedelta(seconds=15)
+    'depends_on_past': False
+    #'retries': 1
+    #'retry_delay': timedelta(minutes=2)
     }
 
 def logger():
@@ -27,6 +28,16 @@ def logger():
     logger.addHandler(logger_handler)
     logger.info('Logs is instatiated')
 
+def get_batch_id():
+
+    batch_id = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + "-" + str(uuid.uuid4())
+
+    #tratamento para extrair o ingestion time (TIMESTAMP)
+    ingestion_time = '-'.join(batch_id.split('-')[:6])
+    ingestion_time = datetime.datetime.strptime(ingestion_time, "%Y-%m-%d-%H-%M-%S")
+    ingestion_time = ingestion_time.isoformat()
+
+    return batch_id, ingestion_time
 
 with DAG('Data_Replication_Workflow',
         default_args=default_args,
@@ -36,6 +47,11 @@ with DAG('Data_Replication_Workflow',
 
         log = PythonOperator(task_id='dag_log',
                             python_callable=logger)
+        
+        generate_batch_id = PythonOperator(task_id='get_batch_id',
+                            python_callable=get_batch_id)
+        ingest_olist_customers = PythonOperator(task_id='get_batch_id',
+                            python_callable=bronze_data_ingestion)
 
        
         
