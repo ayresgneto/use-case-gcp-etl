@@ -1,33 +1,26 @@
-import pandas as pd
-import sys
-sys.path.append('/home/ayres/Documents/projects/use-case-gcp-etl/configs')
-import databases
+class DataIngestion(object):
+    def __init__(self, spark_session):
+        self.spark = spark_session
+        # self.data_source = data_source
+        # self.data_format = data_format
 
-class DataIngestor:
-    def __init__(self, format, dbname=None):
-        self.format = format
-        self.dbname = dbname
         
+    def load_data(self,data_format):
 
-    def read_data(self):
+        if data_format == "jdbc":      
+            return self.spark.read \
+                .format("jdbc") 
 
-        def read_csv(data_source):
-            return pd.read_csv(data_source)
-    
-        def read_sql(dbname):
-            for database_item_list in databases.databases_list:
-                if database_item_list["name"] == dbname:
-                    return database_item_list
+        # elif data_format == "csv":
+        #     return self.spark.read.csv(data_source, header=True, inferSchema=True)
                 
-        if self.format == "csv":
-            data = read_csv(self.data_source)
-        elif self.format == "sql":
-            data = read_sql(self.dbname)
-        # elif self.format == "json":
-        #     data = read_json(self.data_source)
+        # elif data_format == "api":
+        #     import requests
+        #     response = requests.get(data_source)
+        #     data = response.json()
+        #     return self.spark.createDataFrame(data)
         else:
-            raise ValueError(f"Formato de dados não suportado: {self.format}")
+            raise ValueError("Format not found!")
 
-        return data
 
    
