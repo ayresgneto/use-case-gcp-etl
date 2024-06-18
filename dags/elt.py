@@ -39,19 +39,26 @@ def get_batch_id():
 
     return batch_id, ingestion_time
 
-with DAG('Data_Replication_Workflow',
+dag = DAG('Data_Replication_Workflow',
         default_args=default_args,
         catchup=False,
-        schedule_interval=None
-        ) as dag:
-
-        log = PythonOperator(task_id='dag_log',
-                            python_callable=logger)
+        schedule_interval=None)
         
-        generate_batch_id = PythonOperator(task_id='get_batch_id',
-                            python_callable=get_batch_id)
-        ingest_olist_customers = PythonOperator(task_id='get_batch_id',
-                            python_callable=bronze_data_ingestion)
+batch_id, ingestion_time = get_batch_id()
+
+log = PythonOperator(task_id='dag_log',
+                    python_callable=logger,
+                    dag=dag)
+
+generate_batch_id = PythonOperator(task_id='get_batch_id',
+                    python_callable=get_batch_id,
+                    dag=dag)
+
+ingest_olist_customers = PythonOperator(task_id='ingest_olist_customers',
+                            python_callable=bronze_data_ingestion,
+                            op_kwargs={'batch_id': batch_id, 'ingestion_time': ingestion_time},
+                            provide_context=True,
+                            dag=dag)
 
        
         
