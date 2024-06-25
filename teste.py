@@ -9,6 +9,8 @@ spark = SparkSession \
     .config("spark.jars", 
     "/home/ayres/Documents/projects/use-case-gcp-etl/configs/postgresql-42.7.3.jar, \
     https://storage.googleapis.com/hadoop-lib/gcs/gcs-connector-hadoop3-latest.jar") \
+    .config("spark.executor.memory", "4g") \
+    .config("spark.executor.instances", "4") \
     .getOrCreate()
 
 conf = spark.sparkContext._jsc.hadoopConfiguration()
